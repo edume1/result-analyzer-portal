@@ -17,7 +17,6 @@ except ImportError:
 VISITOR_FILE = "visitor_count.txt"
 
 def get_and_increment_visitors() -> int:
-    """Reads and increments the total visitor count once per user session."""
     count = 0
     if os.path.exists(VISITOR_FILE):
         try:
@@ -27,7 +26,6 @@ def get_and_increment_visitors() -> int:
         except Exception:
             count = 0
             
-    # Increment only once when a new browser session starts
     if "user_counted" not in st.session_state:
         st.session_state["user_counted"] = True
         count += 1
@@ -96,7 +94,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Main Banner with Visitor Badge
 st.markdown(f"""
 <div class="main-header">
     <h1 style="margin:0; font-weight:700;">🎓 Result Analyzer Portal</h1>
@@ -111,7 +108,6 @@ st.markdown(f"""
 
 # ----------------- BUILT-IN FALLBACK SUBJECT TITLES -----------------
 BUILTIN_TITLES = {
-    # SPPU Zoology NEP & CBCS
     "ZOO-242-MN": "Animal Diversity (Minor)",
     "ZOO-244-MNP": "Zoology Practical (Minor)",
     "ZOO-292-MN": "Applied Zoology (Minor)",
@@ -137,7 +133,6 @@ BUILTIN_TITLES = {
     "36154": "Parasitology",
     "36155": "Evolutionary Biology",
     "36156": "General Entomology",
-    # Common Arts / Commerce / General
     "CMA102T": "Financial Accounting",
     "FAC101T": "Financial Accounting I",
     "IBE109T": "Business Economics",
@@ -404,6 +399,7 @@ def parse_excel_ledger(file, dynamic_paper_map):
 
     return meta, pd.DataFrame(records)
 
+# ----------------- ROBUST FILTERING & MATRIX BUILDER -----------------
 def build_master_table(df_records, selected_subjs=None):
     if df_records.empty:
         return pd.DataFrame(), [], {}
@@ -414,12 +410,28 @@ def build_master_table(df_records, selected_subjs=None):
     if selected_subjs:
         active_codes = []
         for s in selected_subjs:
-            s_clean = s.strip().lower()
-            matched = [a for a in available_codes if s_clean in a.lower() or s_clean in code_to_display.get(a, '').lower()]
-            active_codes.extend(matched)
-        active_codes = sorted(list(set(active_codes))) if active_codes else available_codes
+            s_raw = s.strip()
+            if not s_raw:
+                continue
+            s_norm = re.sub(r'[\s\-]+', '', s_raw).lower()
+            s_lower = s_raw.lower()
+            
+            for code in available_codes:
+                code_norm = re.sub(r'[\s\-]+', '', code).lower()
+                disp_str = code_to_display.get(code, '').lower()
+                disp_norm = re.sub(r'[\s\-]+', '', disp_str)
+                
+                # Robust match on normalized code, full title, or substring
+                if (s_norm in code_norm or code_norm.startswith(s_norm) or 
+                    s_lower in disp_str or s_norm in disp_norm):
+                    if code not in active_codes:
+                        active_codes.append(code)
     else:
         active_codes = available_codes
+
+    # If no valid subjects match, return empty so user sees warning
+    if not active_codes:
+        return pd.DataFrame(), [], {}
 
     students = df_records[['Seat_No', 'PRN', 'Student_Name']].drop_duplicates(subset=['Seat_No']).reset_index(drop=True)
     students.insert(0, 'Sr. No.', range(1, len(students) + 1))
@@ -431,6 +443,16 @@ def build_master_table(df_records, selected_subjs=None):
         wide[f"{disp} Marks (TOT)"] = wide['Seat_No'].map(sub_df['Total_Marks']).apply(lambda x: x if pd.notna(x) else "---")
         wide[f"{disp} Grade (GRD)"] = wide['Seat_No'].map(sub_df['Grade_or_Status']).apply(lambda x: x if pd.notna(x) else "---")
         
+    # If specific filtering is requested, show only students who opted for at least one selected subject
+    if selected_subjs:
+        subj_grade_cols = [f"{code_to_display.get(c, c)} Grade (GRD)" for c in active_codes]
+        opted_mask = wide[subj_grade_cols].apply(
+            lambda row: any(str(g).strip() not in ('---', 'NOT OPTED', 'NAN', '') for g in row), 
+            axis=1
+        )
+        wide = wide[opted_mask].copy().reset_index(drop=True)
+        wide['Sr. No.'] = range(1, len(wide) + 1)
+
     return wide, active_codes, code_to_display
 
 def get_toppers(wide_df, active_codes, code_to_display):
@@ -552,7 +574,6 @@ uploaded_file = st.sidebar.file_uploader(
     type=["pdf", "xlsx", "xls"]
 )
 
-# Sidebar Visitor Card
 st.sidebar.markdown(f"""
 <div style="background:#eef2f7; padding:10px; border-radius:8px; text-align:center; margin-bottom:15px; border-left:4px solid #2a5298;">
     <span style="font-size:12px; color:#555;">Live Traffic / अभ्यागत</span><br>
@@ -585,10 +606,10 @@ with st.expander("📖 User Guide & Instructions / पोर्टल कसे 
         st.markdown("""
         #### How to Use the Result Analyzer Portal:
         1. **Upload Result Ledger:** Click **Browse files** in the sidebar to upload your university result PDF or Excel copy.
-        2. **Automatic Paper List Detection:** The system automatically scans the first few pages of the PDF to extract the exact Paper Title for every course code.
+        2. **Automatic Paper List Detection:** The system scans the first few pages of the PDF to extract the exact Paper Title for every course code.
         3. **Select Analysis Mode:**
            * **Complete Analysis (All Subjects):** Generates reports for all subjects with full Subject Name & Code.
-           * **Specific Subjects / Codes:** Type desired subject codes or names separated by commas (e.g. `HIN 101, MAR 101, 35151`).
+           * **Specific Subjects / Codes:** Type desired subject codes or names separated by commas (e.g. `HIN 101, MAR 101, 35151`). Only these specific subjects will be displayed.
         4. **Generate Analysis:** Click the blue **🚀 Analyze Result & Generate Merit Report** button.
         5. **Review Results:** Check College PunCode, class pass percentage, subject-wise statistics, and top 3 scorers in each paper.
         6. **Download / Print:** Click **Download Master Analysis Excel** or press **Ctrl + P** to save as a clean PDF.
@@ -601,7 +622,7 @@ with st.expander("📖 User Guide & Instructions / पोर्टल कसे 
         2. **विषयांची नावे आपोआप ओळखणे:** प्रणाली पहिल्या काही पानांवरून (Paper List) प्रत्येक कोडचे अचूक नाव आपोआप शोधून काढते.
         3. **विश्लेषण प्रकार निवडा:**
            * **Complete Analysis:** सर्व विषयांचे संपूर्ण निकाल विश्लेषण (विषयाचा कोड व अचूक नावासह) तयार होते.
-           * **Specific Subjects / Codes:** ठरावीक विषयांचे विश्लेषण करण्यासाठी विषयांचे कोड किंवा नाव स्वल्पविरामाने (comma) वेगळे करून लिहा (उदा. `HIN 101, MAR 101, 35151`).
+           * **Specific Subjects / Codes:** ठरावीक विषयांचे विश्लेषण करण्यासाठी विषयांचे कोड किंवा नाव स्वल्पविरामाने (comma) वेगळे करून लिहा (उदा. `HIN 101, MAR 101, 35151`). फक्त तेच विषय अहवालात दिसतील.
         4. **विश्लेषण सुरू करा:** **🚀 Analyze Result & Generate Merit Report** या बटणावर क्लिक करा.
         5. **अहवाल तपासा:** महाविद्यालय PunCode, एकूण निकाल %, विषयानुसार निकाल टक्केवारी आणि प्रत्येक विषयातील प्रथम ३ गुणवंत विद्यार्थी पहा.
         6. **डाउनलोड व प्रिंट:** **Download Master Analysis Excel** बटणावर क्लिक करून एक्सेल फाइल मिळवा किंवा **Ctrl + P** दाबून अहवाल PDF स्वरूपात सेव्ह करा.
@@ -664,84 +685,93 @@ if uploaded_file:
         if df_records.empty:
             st.error("⚠️ No student records could be detected. Please verify the uploaded file contains legible SPPU tabular student entries.")
         else:
-            selected_list = [s.strip() for s in subject_filter_input.split(",") if s.strip()] if (analysis_mode == "Specific Subjects / Codes" and subject_filter_input.strip()) else None
+            # Parse filter input
+            if analysis_mode == "Specific Subjects / Codes" and subject_filter_input.strip():
+                selected_list = [s.strip() for s in subject_filter_input.split(",") if s.strip()]
+            else:
+                selected_list = None
+
             master_sheet, active_codes, code_to_display = build_master_table(df_records, selected_list)
 
-            st.markdown("---")
-            st.markdown(f"### 📋 Master Marks Ledger ({len(active_codes)} Subjects Evaluated)")
-            st.dataframe(master_sheet, use_container_width=True, height=430)
+            if master_sheet.empty or not active_codes:
+                st.warning(f"⚠️ No matching subjects found for '{subject_filter_input}'. Please check the subject codes or names.")
+            else:
+                scope_label = f"Specific Subjects ({len(active_codes)} Selected)" if selected_list else f"Complete Analysis ({len(active_codes)} Subjects)"
+                st.markdown("---")
+                st.markdown(f"### 📋 Master Marks Ledger — {scope_label}")
+                st.dataframe(master_sheet, use_container_width=True, height=430)
 
-            # Subject Wise Cards with Code & Full Name
-            st.markdown("### 📈 Subject-Wise Summary (विषयानुसार निकाल)")
-            cols = st.columns(min(len(active_codes), 4) if active_codes else 1)
-            for idx, code in enumerate(active_codes):
-                disp = code_to_display.get(code, code)
-                col = cols[idx % len(cols)]
-                g_col = master_sheet[f"{disp} Grade (GRD)"].astype(str).str.upper()
-                opted = int((g_col != "---").sum())
-                passed = int(g_col.isin(["O", "A+", "A", "B+", "B", "C", "D", "P"]).sum())
-                failed = int(g_col.isin(["F", "FAIL", "FFF"]).sum())
-                pct = round((passed / opted) * 100, 2) if opted > 0 else 0.0
-                with col:
-                    st.markdown(f"""
-                    <div class="subject-box">
-                        <strong style="color: #1e3c72; font-size:13px;">{disp}</strong><br>
-                        <small>Opted: <b>{opted}</b> | Passed: <b>{passed}</b> | Failed: <b>{failed}</b></small><br>
-                        <span style="font-size: 16px; color: {'#11998e' if pct >= 50 else '#eb3349'}; font-weight: 700;">{pct}% Pass</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Subject Wise Cards with Code & Full Name
+                st.markdown("### 📈 Subject-Wise Summary (विषयानुसार निकाल)")
+                cols = st.columns(min(len(active_codes), 4) if active_codes else 1)
+                for idx, code in enumerate(active_codes):
+                    disp = code_to_display.get(code, code)
+                    col = cols[idx % len(cols)]
+                    g_col = master_sheet[f"{disp} Grade (GRD)"].astype(str).str.upper()
+                    opted = int((g_col != "---").sum())
+                    passed = int(g_col.isin(["O", "A+", "A", "B+", "B", "C", "D", "P"]).sum())
+                    failed = int(g_col.isin(["F", "FAIL", "FFF"]).sum())
+                    pct = round((passed / opted) * 100, 2) if opted > 0 else 0.0
+                    with col:
+                        st.markdown(f"""
+                        <div class="subject-box">
+                            <strong style="color: #1e3c72; font-size:13px;">{disp}</strong><br>
+                            <small>Opted: <b>{opted}</b> | Passed: <b>{passed}</b> | Failed: <b>{failed}</b></small><br>
+                            <span style="font-size: 16px; color: {'#11998e' if pct >= 50 else '#eb3349'}; font-weight: 700;">{pct}% Pass</span>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-            # Overall Stats
-            total_students = len(master_sheet)
-            all_grades = [f"{code_to_display.get(c, c)} Grade (GRD)" for c in active_codes]
-            student_pass = master_sheet[all_grades].apply(lambda row: all(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P", "---"] for g in row) and any(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P"] for g in row), axis=1)
-            overall_pass = int(student_pass.sum())
-            overall_pct = round((overall_pass / total_students) * 100, 2) if total_students > 0 else 0.0
+                # Overall Stats for evaluated subjects
+                total_students = len(master_sheet)
+                all_grades = [f"{code_to_display.get(c, c)} Grade (GRD)" for c in active_codes]
+                student_pass = master_sheet[all_grades].apply(lambda row: all(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P", "---"] for g in row) and any(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P"] for g in row), axis=1)
+                overall_pass = int(student_pass.sum())
+                overall_pct = round((overall_pass / total_students) * 100, 2) if total_students > 0 else 0.0
 
-            st.markdown("---")
-            st.markdown("### 📊 Overall Class Performance / एकूण वर्ग निकाल")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.markdown(f'<div class="metric-info"><small>TOTAL APPEARED (एकूण विद्यार्थी)</small><h2>{total_students}</h2></div>', unsafe_allow_html=True)
-            m2.markdown(f'<div class="metric-pass"><small>PASSED ALL PAPERS (सर्व विषयात उत्तीर्ण)</small><h2>{overall_pass}</h2></div>', unsafe_allow_html=True)
-            m3.markdown(f'<div class="metric-fail"><small>FAILED / ATKT (अनुत्तीर्ण / एटीकेटी)</small><h2>{total_students - overall_pass}</h2></div>', unsafe_allow_html=True)
-            m4.markdown(f'<div class="metric-pass"><small>OVERALL PASS % (एकूण निकाल %)</small><h2>{overall_pct}%</h2></div>', unsafe_allow_html=True)
+                st.markdown("---")
+                st.markdown("### 📊 Overall Class Performance / एकूण वर्ग निकाल")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.markdown(f'<div class="metric-info"><small>TOTAL APPEARED (एकूण विद्यार्थी)</small><h2>{total_students}</h2></div>', unsafe_allow_html=True)
+                m2.markdown(f'<div class="metric-pass"><small>PASSED ALL PAPERS (सर्व विषयात उत्तीर्ण)</small><h2>{overall_pass}</h2></div>', unsafe_allow_html=True)
+                m3.markdown(f'<div class="metric-fail"><small>FAILED / ATKT (अनुत्तीर्ण / एटीकेटी)</small><h2>{total_students - overall_pass}</h2></div>', unsafe_allow_html=True)
+                m4.markdown(f'<div class="metric-pass"><small>OVERALL PASS % (एकूण निकाल %)</small><h2>{overall_pct}%</h2></div>', unsafe_allow_html=True)
 
-            # Subject-Wise Toppers
-            st.markdown("---")
-            st.markdown("### 🏆 Top 3 Toppers in Respective Subjects / विषयानुसार प्रथम ३ गुणवंत विद्यार्थी")
-            subj_toppers_df = get_toppers(master_sheet, active_codes, code_to_display)
-            if not subj_toppers_df.empty:
-                st.dataframe(subj_toppers_df, use_container_width=True)
+                # Subject-Wise Toppers
+                st.markdown("---")
+                st.markdown("### 🏆 Top 3 Toppers in Respective Subjects / विषयानुसार प्रथम ३ गुणवंत विद्यार्थी")
+                subj_toppers_df = get_toppers(master_sheet, active_codes, code_to_display)
+                if not subj_toppers_df.empty:
+                    st.dataframe(subj_toppers_df, use_container_width=True)
 
-            # Overall Toppers
-            st.markdown("### 🎖️ Overall Merit Rankers / सर्वसाधारण प्रथम ३ गुणवंत")
-            all_marks_cols = [f"{code_to_display.get(c, c)} Marks (TOT)" for c in active_codes]
-            numeric_marks = master_sheet[all_marks_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            master_sheet['Grand_Total'] = numeric_marks.sum(axis=1)
-            overall_top = master_sheet.sort_values(by="Grand_Total", ascending=False).head(3).reset_index(drop=True)
-            overall_top_df = pd.DataFrame({
-                "Rank": [f"Rank {i+1}" for i in range(len(overall_top))],
-                "Seat No": overall_top['Seat_No'],
-                "PRN No": overall_top['PRN'],
-                "Student Name": overall_top['Student_Name'],
-                "Total Marks": overall_top['Grand_Total']
-            })
-            st.table(overall_top_df)
+                # Overall Toppers across evaluated subjects
+                st.markdown("### 🎖️ Overall Merit Rankers / सर्वसाधारण प्रथम ३ गुणवंत")
+                all_marks_cols = [f"{code_to_display.get(c, c)} Marks (TOT)" for c in active_codes]
+                numeric_marks = master_sheet[all_marks_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+                master_sheet['Grand_Total'] = numeric_marks.sum(axis=1)
+                overall_top = master_sheet.sort_values(by="Grand_Total", ascending=False).head(3).reset_index(drop=True)
+                overall_top_df = pd.DataFrame({
+                    "Rank": [f"Rank {i+1}" for i in range(len(overall_top))],
+                    "Seat No": overall_top['Seat_No'],
+                    "PRN No": overall_top['PRN'],
+                    "Student Name": overall_top['Student_Name'],
+                    "Total Marks": overall_top['Grand_Total']
+                })
+                st.table(overall_top_df)
 
-            # Export Excel
-            st.markdown("---")
-            excel_bytes = generate_excel(metadata, master_sheet, active_codes, code_to_display, subj_toppers_df, overall_top_df)
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                st.download_button(
-                    label="📗 Download Master Analysis Excel (.xlsx)",
-                    data=excel_bytes,
-                    file_name="Master_Result_Analysis.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            with col_b2:
-                st.info("💡 **Save as PDF:** Press **Ctrl + P** on your keyboard to instantly print or save this report.")
+                # Export Excel
+                st.markdown("---")
+                excel_bytes = generate_excel(metadata, master_sheet, active_codes, code_to_display, subj_toppers_df, overall_top_df)
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    st.download_button(
+                        label="📗 Download Master Analysis Excel (.xlsx)",
+                        data=excel_bytes,
+                        file_name="Master_Result_Analysis.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                with col_b2:
+                    st.info("💡 **Save as PDF:** Press **Ctrl + P** on your keyboard to instantly print or save this report.")
 
 else:
     st.info("👈 Please upload your result ledger from the sidebar to begin analysis.")
