@@ -57,7 +57,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Main Portal Banner (Renamed cleanly to "Result Analyzer Portal")
 st.markdown("""
 <div class="main-header">
     <h1 style="margin:0; font-weight:700;">🎓 Result Analyzer Portal</h1>
@@ -67,7 +66,68 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------- CORE DATA PARSING FUNCTIONS -----------------
+# ----------------- SUBJECT CODE & TITLE DICTIONARY -----------------
+KNOWN_SUBJECT_TITLES = {
+    # SPPU Zoology NEP & CBCS Courses
+    "ZOO-242-MN": "Animal Diversity (Minor)",
+    "ZOO-244-MNP": "Zoology Practical (Minor)",
+    "ZOO-292-MN": "Applied Zoology (Minor)",
+    "ZOO-294-MNP": "Zoology Practical (Minor)",
+    "ZOO-101": "Animal Systematics & Diversity I",
+    "ZOO-102": "Animal Systematics & Diversity II",
+    "ZOO-103": "Zoology Practical I",
+    "ZOO-201": "Animal Diversity III",
+    "ZOO-202": "Applied Zoology I",
+    "ZOO-203": "Zoology Practical II",
+    "35151": "Animal Diversity III",
+    "35152": "Animal Diversity IV",
+    "35153": "Applied Zoology I",
+    "35154": "Applied Zoology II",
+    "35155": "Cell & Molecular Biology",
+    "35156": "Genetics",
+    "35157": "Zoology Practical I",
+    "35158": "Zoology Practical II",
+    "35159": "Zoology Practical III",
+    "36151": "Animal Physiology",
+    "36152": "Molecular Biology",
+    "36153": "Mammalian Histology",
+    "36154": "Parasitology",
+    "36155": "Evolutionary Biology",
+    "36156": "General Entomology",
+    "36157": "Zoology Practical IV",
+    "36158": "Zoology Practical V",
+    "36159": "Zoology Practical VI",
+    # Common Commerce / Science / General Courses
+    "CMA102T": "Financial Accounting",
+    "FAC101T": "Financial Accounting I",
+    "IBE109T": "Business Economics",
+    "SEC111COM": "Skill Enhancement - Commerce",
+    "AEC-101": "Ability Enhancement Compulsory",
+    "VEC-101-T": "Value Education Course",
+    "CA201-T": "Computer Applications",
+    "CA221-P": "Computer Applications Practical",
+    "CSAI232IKS-T": "Indian Knowledge System",
+    "MOC203-T": "MOOC / Online Course I",
+    "OE-201-MAR": "Open Elective - Marathi",
+    "AEC-251-MAR": "Environmental Studies",
+    "CA271P": "Database Lab Practical",
+    "MOC253T": "MOOC / Online Course II",
+    "SEC251COM": "Digital Marketing / SEC",
+    "OE-251-MAR": "Open Elective - Marathi II"
+}
+
+def get_display_subject_name(code: str, extracted_title: str = "") -> str:
+    """Formats code to: CODE (SUBJECT NAME)"""
+    clean_code = str(code).strip().upper()
+    if extracted_title and len(extracted_title.strip()) >= 3:
+        clean_ext = extracted_title.strip().title()
+        if clean_ext.upper() != clean_code:
+            return f"{clean_code} ({clean_ext})"
+    if clean_code in KNOWN_SUBJECT_TITLES:
+        return f"{clean_code} ({KNOWN_SUBJECT_TITLES[clean_code]})"
+    return clean_code
+
+# ----------------- PARSER ENGINE -----------------
 EXCLUDED = {
     "MIN", "MAX", "INT", "EXT", "TOT", "CRD", "ERN", "GRD", "PNT", "PAGE", 
     "SEAT", "NAME", "MOTHER", "SAVITRIBAI", "UNIVERSITY", "COLLEGE", "CENTRE",
@@ -100,12 +160,10 @@ def extract_metadata(text):
         "exam_session": "Exam Session 2026"
     }
     
-    # Detect PunCode (e.g., CAAP010180)
     pun_match = re.search(r'\b(CA[A-Z0-9]{8,10})\b', text, re.IGNORECASE)
     if pun_match:
         meta["puncode"] = pun_match.group(1).upper()
         
-    # Detect College Code & Name
     inst_match = re.search(r'(?:COLLEGE|CENTRE|INSTITUTE)\s*:\s*\[?([0-9A-Za-z]+)\]?\s*([A-Za-z0-9\s,.-]+)', text, re.IGNORECASE)
     if inst_match:
         meta["college_code"] = inst_match.group(1).strip()
@@ -188,6 +246,15 @@ def parse_ledger_text(raw_text):
                 if not grade:
                     continue
 
+                # Check if subject title is printed after code before numbers
+                extracted_title = ""
+                title_words = []
+                for tok in tokens[:grade_idx]:
+                    if re.match(r'^[A-Za-z&/()-]{3,}$', tok) and tok.upper() not in EXCLUDED and tok.upper() not in VALID_GRADES:
+                        title_words.append(tok)
+                if title_words:
+                    extracted_title = " ".join(title_words)
+
                 valid_nums = []
                 for tok in tokens[:grade_idx]:
                     if tok in ('---', '--', '-', ':', '!', '*', '$', '#', '&', '^'):
@@ -205,11 +272,14 @@ def parse_ledger_text(raw_text):
                     else:
                         tot_marks = valid_nums[-1]
 
+                display_name = get_display_subject_name(code, extracted_title)
+
                 records.append({
                     "Seat_No": current_student["Seat_No"],
                     "PRN": current_student["PRN"],
                     "Student_Name": current_student["Student_Name"],
                     "Subject_Code": code,
+                    "Subject_Display": display_name,
                     "Total_Marks": tot_marks,
                     "Grade_or_Status": grade
                 })
@@ -252,16 +322,19 @@ def parse_excel_ledger(file):
             name = str(row[name_col]).strip()
 
             for m_col in subj_cols:
-                code = m_col.replace("Marks", "").replace("marks", "").strip().upper()
-                g_col = next((c for c in headers if code.lower() in c.lower() and "grade" in c.lower()), None)
+                raw_code = m_col.replace("Marks", "").replace("marks", "").strip().upper()
+                g_col = next((c for c in headers if raw_code.lower() in c.lower() and "grade" in c.lower()), None)
                 m_val, sp = clean_marks(row[m_col]) if pd.notna(row[m_col]) else (0.0, None)
                 g_val = sp if sp else (str(row[g_col]).strip() if g_col and pd.notna(row[g_col]) else ("P" if m_val >= 20 else "F"))
+
+                display_name = get_display_subject_name(raw_code)
 
                 records.append({
                     "Seat_No": seat,
                     "PRN": prn,
                     "Student_Name": name,
-                    "Subject_Code": code,
+                    "Subject_Code": raw_code,
+                    "Subject_Display": display_name,
                     "Total_Marks": m_val,
                     "Grade_or_Status": g_val
                 })
@@ -270,32 +343,39 @@ def parse_excel_ledger(file):
 
 def build_master_table(df_records, selected_subjs=None):
     if df_records.empty:
-        return pd.DataFrame(), []
-    available = list(df_records['Subject_Code'].unique())
+        return pd.DataFrame(), [], {}
+        
+    code_to_display = dict(zip(df_records['Subject_Code'], df_records['Subject_Display']))
+    available_codes = list(df_records['Subject_Code'].unique())
+    
     if selected_subjs:
-        active = []
+        active_codes = []
         for s in selected_subjs:
-            matched = [a for a in available if s.strip().lower() in a.lower()]
-            active.extend(matched)
-        active = sorted(list(set(active))) if active else available
+            s_clean = s.strip().lower()
+            matched = [a for a in available_codes if s_clean in a.lower() or s_clean in code_to_display.get(a, '').lower()]
+            active_codes.extend(matched)
+        active_codes = sorted(list(set(active_codes))) if active_codes else available_codes
     else:
-        active = available
+        active_codes = available_codes
 
     students = df_records[['Seat_No', 'PRN', 'Student_Name']].drop_duplicates(subset=['Seat_No']).reset_index(drop=True)
     students.insert(0, 'Sr. No.', range(1, len(students) + 1))
 
     wide = students.copy()
-    for subj in active:
-        sub_df = df_records[df_records['Subject_Code'] == subj].drop_duplicates(subset=['Seat_No']).set_index('Seat_No')
-        wide[f"{subj} Marks (TOT)"] = wide['Seat_No'].map(sub_df['Total_Marks']).apply(lambda x: x if pd.notna(x) else "---")
-        wide[f"{subj} Grade (GRD)"] = wide['Seat_No'].map(sub_df['Grade_or_Status']).apply(lambda x: x if pd.notna(x) else "---")
-    return wide, active
+    for code in active_codes:
+        disp = code_to_display.get(code, code)
+        sub_df = df_records[df_records['Subject_Code'] == code].drop_duplicates(subset=['Seat_No']).set_index('Seat_No')
+        wide[f"{disp} Marks (TOT)"] = wide['Seat_No'].map(sub_df['Total_Marks']).apply(lambda x: x if pd.notna(x) else "---")
+        wide[f"{disp} Grade (GRD)"] = wide['Seat_No'].map(sub_df['Grade_or_Status']).apply(lambda x: x if pd.notna(x) else "---")
+        
+    return wide, active_codes, code_to_display
 
-def get_toppers(wide_df, active_subjs):
+def get_toppers(wide_df, active_codes, code_to_display):
     rows = []
-    for subj in active_subjs:
-        col_m = f"{subj} Marks (TOT)"
-        col_g = f"{subj} Grade (GRD)"
+    for code in active_codes:
+        disp = code_to_display.get(code, code)
+        col_m = f"{disp} Marks (TOT)"
+        col_g = f"{disp} Grade (GRD)"
         if col_m not in wide_df.columns:
             continue
         sub = wide_df[['Seat_No', 'PRN', 'Student_Name', col_m, col_g]].copy()
@@ -304,7 +384,7 @@ def get_toppers(wide_df, active_subjs):
         top3 = opted.sort_values(by="Marks_Num", ascending=False).head(3).reset_index(drop=True)
         for rank, r in top3.iterrows():
             rows.append({
-                "Subject / Paper": subj,
+                "Subject / Paper": disp,
                 "Rank": f"Rank {rank + 1}",
                 "Seat No": str(r["Seat_No"]),
                 "PRN No": str(r["PRN"]),
@@ -314,7 +394,7 @@ def get_toppers(wide_df, active_subjs):
             })
     return pd.DataFrame(rows)
 
-def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
+def generate_excel(meta, wide_df, active_codes, code_to_display, subj_toppers, overall_toppers):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Master Marks & Summary"
@@ -323,17 +403,15 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
     f_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     bdr = Border(left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'), top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF'))
 
-    num_cols = 4 + len(subjects) * 2
+    num_cols = 4 + len(active_codes) * 2
 
-    # Institution & PunCode Banner
     ws.cell(row=1, column=1, value=meta.get("institution", "").upper()).font = Font(name="Calibri", size=13, bold=True, color="1F497D")
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=num_cols)
-    ws.cell(row=2, column=1, value=f"PunCode: {meta.get('puncode', 'N/A')}  |  College Code: {meta.get('college_code', 'N/A')}").font = Font(name="Calibri", size=10, bold=True)
+    ws.cell(row=2, column=1, value=f"PunCode : {meta.get('puncode', 'N/A')}  |  College Code : {meta.get('college_code', 'N/A')}").font = Font(name="Calibri", size=10, bold=True)
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=num_cols)
     ws.cell(row=3, column=1, value=f"{meta.get('faculty', '')} - {meta.get('exam_session', '')}").font = Font(name="Calibri", size=10, italic=True)
     ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=num_cols)
 
-    # Table Headers
     base_headers = ["Sr. No.", "Seat No.", "PRN No.", "Student Name"]
     for c, h in enumerate(base_headers, 1):
         cell = ws.cell(row=5, column=c, value=h)
@@ -341,11 +419,12 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
         cell.fill = h_fill
 
     c = 5
-    for s in subjects:
-        cell_m = ws.cell(row=5, column=c, value=f"{s}\nMarks")
+    for code in active_codes:
+        disp = code_to_display.get(code, code)
+        cell_m = ws.cell(row=5, column=c, value=f"{disp}\nMarks (TOT)")
         cell_m.font = Font(color="FFFFFF", bold=True)
         cell_m.fill = h_fill
-        cell_g = ws.cell(row=5, column=c+1, value=f"{s}\nGrade")
+        cell_g = ws.cell(row=5, column=c+1, value=f"{disp}\nGrade (GRD)")
         cell_g.font = Font(color="FFFFFF", bold=True)
         cell_g.fill = h_fill
         c += 2
@@ -357,9 +436,10 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
         ws.cell(row=r_idx, column=3, value=str(row.get('PRN', '')))
         ws.cell(row=r_idx, column=4, value=row.get('Student_Name', ''))
         c = 5
-        for s in subjects:
-            m = row.get(f"{s} Marks (TOT)", "---")
-            g = str(row.get(f"{s} Grade (GRD)", "---")).strip()
+        for code in active_codes:
+            disp = code_to_display.get(code, code)
+            m = row.get(f"{disp} Marks (TOT)", "---")
+            g = str(row.get(f"{disp} Grade (GRD)", "---")).strip()
             ws.cell(row=r_idx, column=c, value=m)
             c_g = ws.cell(row=r_idx, column=c+1, value=g)
             if g.upper() in ["F", "FAIL", "FFF"]:
@@ -371,8 +451,9 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
 
     ws.cell(row=r_idx, column=1, value="RESULT PASS %").font = Font(bold=True, color="1F497D")
     c = 5
-    for s in subjects:
-        g_col = wide_df[f"{s} Grade (GRD)"].astype(str).str.upper()
+    for code in active_codes:
+        disp = code_to_display.get(code, code)
+        g_col = wide_df[f"{disp} Grade (GRD)"].astype(str).str.upper()
         opted = (g_col != "---").sum()
         passed = g_col.isin(["O", "A+", "A", "B+", "B", "C", "D", "P"]).sum()
         pct = f"{round((passed / opted) * 100, 2)}%" if opted > 0 else "0%"
@@ -381,18 +462,18 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
 
     if not subj_toppers.empty:
         ws_top = wb.create_sheet(title="Subject-Wise Toppers")
-        for c, col_n in enumerate(subj_toppers.columns, 1):
-            ws_top.cell(row=1, column=c, value=col_n).font = Font(color="FFFFFF", bold=True)
-            ws_top.cell(row=1, column=c).fill = h_fill
+        for c_i, col_n in enumerate(subj_toppers.columns, 1):
+            ws_top.cell(row=1, column=c_i, value=col_n).font = Font(color="FFFFFF", bold=True)
+            ws_top.cell(row=1, column=c_i).fill = h_fill
         for r_i, (_, row) in enumerate(subj_toppers.iterrows(), 2):
             for c_i, val in enumerate(row.values, 1):
                 ws_top.cell(row=r_i, column=c_i, value=val)
 
     if not overall_toppers.empty:
         ws_all = wb.create_sheet(title="Overall Toppers")
-        for c, col_n in enumerate(overall_toppers.columns, 1):
-            ws_all.cell(row=1, column=c, value=col_n).font = Font(color="FFFFFF", bold=True)
-            ws_all.cell(row=1, column=c).fill = h_fill
+        for c_i, col_n in enumerate(overall_toppers.columns, 1):
+            ws_all.cell(row=1, column=c_i, value=col_n).font = Font(color="FFFFFF", bold=True)
+            ws_all.cell(row=1, column=c_i).fill = h_fill
         for r_i, (_, row) in enumerate(overall_toppers.iterrows(), 2):
             for c_i, val in enumerate(row.values, 1):
                 ws_all.cell(row=r_i, column=c_i, value=val)
@@ -401,7 +482,7 @@ def generate_excel(meta, wide_df, subjects, subj_toppers, overall_toppers):
     wb.save(buf)
     return buf.getvalue()
 
-# ----------------- SIDEBAR & INSTRUCTIONS -----------------
+# ----------------- SIDEBAR CONTROLS -----------------
 st.sidebar.markdown("### 📁 Upload Ledger File")
 uploaded_file = st.sidebar.file_uploader(
     "Choose PDF or Excel Result File",
@@ -420,10 +501,10 @@ if uploaded_file:
     )
     if analysis_mode == "Specific Subjects / Codes":
         subject_filter_input = st.sidebar.text_area(
-            "Enter Subject Code(s):",
-            placeholder="e.g. ZOO-242-MN, ZOO-244-MNP"
+            "Enter Subject Code(s) or Name(s):",
+            placeholder="e.g. 35151, ZOO-242-MN, Animal Diversity"
         )
-        st.sidebar.caption("ℹ️ Separate multiple codes with commas (,).")
+        st.sidebar.caption("ℹ️ Separate multiple codes/names with commas (,).")
 
 # ----------------- DETAILED BILINGUAL INSTRUCTIONS -----------------
 with st.expander("📖 User Guide & Instructions / पोर्टल कसे वापरावे (मार्गदर्शन)", expanded=False):
@@ -434,10 +515,10 @@ with st.expander("📖 User Guide & Instructions / पोर्टल कसे 
         #### How to Use the Result Analyzer Portal:
         1. **Upload Result Ledger:** Click **Browse files** in the sidebar to upload your university result PDF or Excel copy.
         2. **Select Analysis Mode:**
-           * **Complete Analysis (All Subjects):** Generates reports for all subjects found across both columns of the ledger.
-           * **Specific Subjects / Codes:** Type desired subject codes separated by commas (e.g. `ZOO-242-MN, ZOO-244-MNP`).
+           * **Complete Analysis (All Subjects):** Generates reports for all subjects found across both columns of the ledger with Subject Name & Code.
+           * **Specific Subjects / Codes:** Type desired subject codes or names separated by commas (e.g. `35151, ZOO-242-MN`).
         3. **Generate Analysis:** Click the blue **🚀 Analyze Result & Generate Merit Report** button.
-        4. **Review Results:** Check class pass percentage, subject-wise statistics, and top 3 scorers in each paper.
+        4. **Review Results:** Check College PunCode, class pass percentage, subject-wise statistics, and top 3 scorers in each paper.
         5. **Download / Print:** Click **Download Master Analysis Excel** or press **Ctrl + P** to save as a clean PDF.
         """)
         
@@ -446,10 +527,10 @@ with st.expander("📖 User Guide & Instructions / पोर्टल कसे 
         #### निकाल विश्लेषक पोर्टल वापरण्याची पद्धत:
         1. **निकाल पत्रक अपलोड करा:** डाव्या बाजूला दिलेल्या **Browse files** वर क्लिक करून विद्यापीठाचे निकाल पत्रक (PDF किंवा Excel) अपलोड करा.
         2. **विश्लेषण प्रकार निवडा:**
-           * **Complete Analysis:** सर्व विषयांचे संपूर्ण निकाल विश्लेषण तयार होते.
-           * **Specific Subjects / Codes:** ठरावीक विषयांचे विश्लेषण करण्यासाठी विषयांचे कोड स्वल्पविरामाने (comma) वेगळे करून लिहा (उदा. `ZOO-242-MN, ZOO-244-MNP`).
+           * **Complete Analysis:** सर्व विषयांचे संपूर्ण निकाल विश्लेषण (विषयाचा कोड व नावासह) तयार होते.
+           * **Specific Subjects / Codes:** ठरावीक विषयांचे विश्लेषण करण्यासाठी विषयांचे कोड किंवा नाव स्वल्पविरामाने (comma) वेगळे करून लिहा (उदा. `35151, ZOO-242-MN`).
         3. **विश्लेषण सुरू करा:** **🚀 Analyze Result & Generate Merit Report** या बटणावर क्लिक करा.
-        4. **अहवाल तपासा:** एकूण निकाल, विषयानुसार टक्केवारी आणि प्रत्येक विषयातील प्रथम ३ गुणवंत विद्यार्थ्यांची यादी पहा.
+        4. **अहवाल तपासा:** महाविद्यालय PunCode, एकूण निकाल, विषयानुसार निकाल टक्केवारी आणि प्रत्येक विषयातील प्रथम ३ गुणवंत विद्यार्थ्यांची यादी तपासा.
         5. **डाउनलोड व प्रिंट:** **Download Master Analysis Excel** बटणावर क्लिक करून एक्सेल फाइल मिळवा किंवा **Ctrl + P** दाबून अहवाल PDF स्वरूपात सेव्ह करा.
         """)
 
@@ -469,7 +550,6 @@ with st.sidebar.expander("💬 Ask Help / मदत", expanded=False):
 if uploaded_file:
     file_ext = uploaded_file.name.split('.')[-1].lower()
 
-    # Document Preview
     with st.expander("👁️ View Uploaded Document Preview", expanded=True):
         if file_ext == "pdf":
             uploaded_file.seek(0)
@@ -497,8 +577,8 @@ if uploaded_file:
         # Institution Banner with PunCode & College Code
         st.markdown(f"""
         <div class="inst-card">
-            <h3 style="margin:0; color:#1e3c72; font-weight:700;">{metadata.get('institution', 'ANNASAHEB WAGHIRE COLLEGE, OTUR')}</h3>
-            <p style="margin:5px 0 0 0; font-size:14px; color:#495057;">
+            <h3 style="margin:0; color:#1e3c72; font-weight:700;">College : {metadata.get('institution', 'ANNASAHEB WAGHIRE COLLEGE, OTUR')}</h3>
+            <p style="margin:6px 0 0 0; font-size:14px; color:#495057;">
                 <b>PunCode :</b> {metadata.get('puncode', 'CAAP010180')} &nbsp;|&nbsp; 
                 <b>College Code :</b> {metadata.get('college_code', '0234')} &nbsp;|&nbsp;
                 <b>Faculty :</b> {metadata.get('faculty', 'Faculty Analysis')} &nbsp;|&nbsp;
@@ -511,18 +591,19 @@ if uploaded_file:
             st.error("⚠️ No student records could be detected. Please verify the uploaded file contains legible SPPU tabular student entries.")
         else:
             selected_list = [s.strip() for s in subject_filter_input.split(",") if s.strip()] if (analysis_mode == "Specific Subjects / Codes" and subject_filter_input.strip()) else None
-            master_sheet, active_subjects = build_master_table(df_records, selected_list)
+            master_sheet, active_codes, code_to_display = build_master_table(df_records, selected_list)
 
             st.markdown("---")
-            st.markdown(f"### 📋 Master Marks Ledger ({len(active_subjects)} Subjects Evaluated)")
+            st.markdown(f"### 📋 Master Marks Ledger ({len(active_codes)} Subjects Evaluated)")
             st.dataframe(master_sheet, use_container_width=True, height=430)
 
-            # Subject Wise Cards
-            st.markdown("### 📈 Subject-Wise Summary")
-            cols = st.columns(min(len(active_subjects), 4) if active_subjects else 1)
-            for idx, subj in enumerate(active_subjects):
+            # Subject Wise Cards with Code & Name
+            st.markdown("### 📈 Subject-Wise Summary (विषयानुसार निकाल)")
+            cols = st.columns(min(len(active_codes), 4) if active_codes else 1)
+            for idx, code in enumerate(active_codes):
+                disp = code_to_display.get(code, code)
                 col = cols[idx % len(cols)]
-                g_col = master_sheet[f"{subj} Grade (GRD)"].astype(str).str.upper()
+                g_col = master_sheet[f"{disp} Grade (GRD)"].astype(str).str.upper()
                 opted = int((g_col != "---").sum())
                 passed = int(g_col.isin(["O", "A+", "A", "B+", "B", "C", "D", "P"]).sum())
                 failed = int(g_col.isin(["F", "FAIL", "FFF"]).sum())
@@ -530,7 +611,7 @@ if uploaded_file:
                 with col:
                     st.markdown(f"""
                     <div class="subject-box">
-                        <strong style="color: #1e3c72;">{subj}</strong><br>
+                        <strong style="color: #1e3c72; font-size:13px;">{disp}</strong><br>
                         <small>Opted: <b>{opted}</b> | Passed: <b>{passed}</b> | Failed: <b>{failed}</b></small><br>
                         <span style="font-size: 16px; color: {'#11998e' if pct >= 50 else '#eb3349'}; font-weight: 700;">{pct}% Pass</span>
                     </div>
@@ -538,7 +619,7 @@ if uploaded_file:
 
             # Overall Stats
             total_students = len(master_sheet)
-            all_grades = [f"{s} Grade (GRD)" for s in active_subjects]
+            all_grades = [f"{code_to_display.get(c, c)} Grade (GRD)" for c in active_codes]
             student_pass = master_sheet[all_grades].apply(lambda row: all(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P", "---"] for g in row) and any(str(g).upper() in ["O", "A+", "A", "B+", "B", "C", "D", "P"] for g in row), axis=1)
             overall_pass = int(student_pass.sum())
             overall_pct = round((overall_pass / total_students) * 100, 2) if total_students > 0 else 0.0
@@ -554,13 +635,13 @@ if uploaded_file:
             # Subject-Wise Toppers
             st.markdown("---")
             st.markdown("### 🏆 Top 3 Toppers in Respective Subjects / विषयानुसार प्रथम ३ गुणवंत विद्यार्थी")
-            subj_toppers_df = get_toppers(master_sheet, active_subjects)
+            subj_toppers_df = get_toppers(master_sheet, active_codes, code_to_display)
             if not subj_toppers_df.empty:
                 st.dataframe(subj_toppers_df, use_container_width=True)
 
             # Overall Toppers
             st.markdown("### 🎖️ Overall Merit Rankers / सर्वसाधारण प्रथम ३ गुणवंत")
-            all_marks_cols = [f"{s} Marks (TOT)" for s in active_subjects]
+            all_marks_cols = [f"{code_to_display.get(c, c)} Marks (TOT)" for c in active_codes]
             numeric_marks = master_sheet[all_marks_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
             master_sheet['Grand_Total'] = numeric_marks.sum(axis=1)
             overall_top = master_sheet.sort_values(by="Grand_Total", ascending=False).head(3).reset_index(drop=True)
@@ -575,7 +656,7 @@ if uploaded_file:
 
             # Export Excel
             st.markdown("---")
-            excel_bytes = generate_excel(metadata, master_sheet, active_subjects, subj_toppers_df, overall_top_df)
+            excel_bytes = generate_excel(metadata, master_sheet, active_codes, code_to_display, subj_toppers_df, overall_top_df)
             col_b1, col_b2 = st.columns(2)
             with col_b1:
                 st.download_button(
